@@ -1,40 +1,93 @@
-// 配置
+// 反代配置
 const config = {
-  // 目标网站
-  target: 'https://archiveofourown.org',
+  target: TARGET_URL || 'https://archiveofourown.org', // 使用环境变量或默认值
   
-  // 需要移除的请求头
-  headersToRemove: [
-    'cf-connecting-ip',
-    'cf-ray',
-    'cf-ipcountry',
-    'x-forwarded-for',
-    'x-real-ip'
-  ],
+  // 请求头处理
+  modifyRequestHeaders: (headers, host) => {
+    // 移除 Cloudflare 特定头部
+    headers.delete('cf-connecting-ip')
+    headers.delete('cf-ray')
+    headers.delete('cf-ipcountry')
+    
+    // 设置正确的 Host 头
+    headers.set('Host', new URL(config.target).hostname)
+    
+    // 添加转发信息
+    headers.set('X-Forwarded-Host', host)
+    headers.set('X-Forwarded-Proto', 'https')
+    
+    return headers
+  },
   
-  // 需要修改的响应头
-  modifyResponseHeaders: {
-    'access-control-allow-origin': '*',
-    'cache-control': 'public, max-age=3600'
+  // 响应头处理
+  modifyResponseHeaders: (headers) => {
+    // 允许跨域
+    headers.set('Access-Control-Allow-Origin', '*')
+    
+    // 移除可能引起问题的头部
+    headers.delete('content-security-policy')
+    
+    return headers
   }
 }
 
-addEventListener('fetch', event => {
-  event.respondWith(handleRequest(event.request))
-})
-
+// 主处理函数
 async function handleRequest(request) {
-  // 处理OPTIONS预检请求
-  if (request.method === 'OPTIONS') {
-    return handleCORS(request)
-  }
-  
   const url = new URL(request.url)
-  const targetUrl = new URL(config.target)
   
-  // 构建最终URL
+  // 构建目标URL
+  const targetUrl = new URL(config.target)
   targetUrl.pathname = url.pathname
   targetUrl.search = url.search
+  
+  try {
+    // 修改请求头
+    const headers = config.modifyRequestHeaders(
+      new Headers(request.headers),
+      url.hostname
+    )
+    
+    // 创建新请求
+    const newRequest = new Request(targetUrl, {
+      method: request.method,
+      headers: headers,
+      body: request.body,
+      redirect: 'follow'
+    })
+    
+    // 发送请求
+    const response = await fetch(newRequest)
+    
+    // 修改响应头
+    const newHeaders = config.modifyResponseHeaders(
+      new Headers(response.headers)
+    )
+    
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: newHeaders
+    })
+    
+  } catch (error) {
+    console.error('Proxy error:', error)
+    return new Response(JSON.stringify({
+      error: 'Proxy error',
+      message: error.message
+    }), {
+      status: 502,
+      headers: { 
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*'
+      }
+    })
+  }
+}
+
+// Worker 入口
+addEventListener('fetch', event => {
+  event.respondWith(handleRequest(event.request))
+})  targetUrl.search = url.search
   
   // 准备请求头
   const headers = new Headers(request.headers)
@@ -246,4 +299,5 @@ function getRootHtml() {
 </body>
 </html>`;
 }
+
 
