@@ -1,46 +1,130 @@
+// é…ç½®
+const config = {
+  // ç›®æ ‡ç½‘ç«™
+  target: 'https://archiveofourown.org',
+  
+  // éœ€è¦ç§»é™¤çš„è¯·æ±‚å¤´
+  headersToRemove: [
+    'cf-connecting-ip',
+    'cf-ray',
+    'cf-ipcountry',
+    'x-forwarded-for',
+    'x-real-ip'
+  ],
+  
+  // éœ€è¦ä¿®æ”¹çš„å“åº”å¤´
+  modifyResponseHeaders: {
+    'access-control-allow-origin': '*',
+    'cache-control': 'public, max-age=3600'
+  }
+}
+
 addEventListener('fetch', event => {
-  event.respondWith(handleRequest(event.request));
-});
+  event.respondWith(handleRequest(event.request))
+})
 
 async function handleRequest(request) {
+  // å¤„ç†OPTIONSé¢„æ£€è¯·æ±‚
+  if (request.method === 'OPTIONS') {
+    return handleCORS(request)
+  }
+  
+  const url = new URL(request.url)
+  const targetUrl = new URL(config.target)
+  
+  // æ„å»ºæœ€ç»ˆURL
+  targetUrl.pathname = url.pathname
+  targetUrl.search = url.search
+  
+  // å‡†å¤‡è¯·æ±‚å¤´
+  const headers = new Headers(request.headers)
+  
+  // è®¾ç½®æ­£ç¡®çš„Hostå¤´
+  headers.set('Host', targetUrl.hostname)
+  
+  // ç§»é™¤ä¸éœ€è¦çš„è¯·æ±‚å¤´
+  config.headersToRemove.forEach(header => {
+    headers.delete(header)
+  })
+  
+  // æ·»åŠ è‡ªå®šä¹‰è¯·æ±‚å¤´ï¼ˆå¯é€‰ï¼‰
+  headers.set('X-Forwarded-Host', url.hostname)
+  
   try {
-      const url = new URL(request.url);
-      console.log('Request URL:', url.href);
-
-      // Èç¹û·ÃÎÊ¸ùÄ¿Â¼£¬·µ»ØHTML
-      if (url.pathname === "/") {
-          return new Response(getRootHtml(), {
-              headers: {
-                  'Content-Type': 'text/html; charset=utf-8'
-              }
-          });
+    // å‘é€è¯·æ±‚åˆ°ç›®æ ‡ç½‘ç«™
+    const response = await fetch(targetUrl.toString(), {
+      method: request.method,
+      headers: headers,
+      body: request.body,
+      redirect: 'follow'
+    })
+    
+    // å¤„ç†å“åº”
+    return modifyResponse(response, url)
+    
+  } catch (error) {
+    console.error('Proxy error:', error)
+    return new Response(JSON.stringify({
+      error: 'Proxy error',
+      message: error.message
+    }), {
+      status: 502,
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*'
       }
+    })
+  }
+}
 
-      // °×Ãûµ¥ÖĞµÄÍøÕ¾
-      const whitelist = ['archiveofourown.com', 'emos.lol'];
+// å¤„ç†CORSé¢„æ£€è¯·æ±‚
+function handleCORS(request) {
+  return new Response(null, {
+    status: 204,
+    headers: {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+      'Access-Control-Allow-Headers': '*',
+      'Access-Control-Max-Age': '86400'
+    }
+  })
+}
 
-      // ¼ì²éÄ¿±ê URL ÊÇ·ñÔÚ°×Ãûµ¥ÖĞ
-      let actualUrlStr = decodeURIComponent(url.pathname.replace("/", ""));
-      actualUrlStr = ensureProtocol(actualUrlStr, url.protocol);
-      const targetUrl = new URL(actualUrlStr);
-
-      if (!whitelist.includes(targetUrl.hostname)) {
-          return new Response('This site is not allowed.', {
-              status: 403,
-              statusText: 'Forbidden',
-              headers: {
-                  'Content-Type': 'text/plain; charset=utf-8'
-              }
-          });
-      }
-
-      // ±£Áô²éÑ¯²ÎÊı
+// ä¿®æ”¹å“åº”
+function modifyResponse(response, originalUrl) {
+  const newHeaders = new Headers(response.headers)
+  
+  // åº”ç”¨è‡ªå®šä¹‰å“åº”å¤´
+  Object.entries(config.modifyResponseHeaders).forEach(([key, value]) => {
+    newHeaders.set(key, value)
+  })
+  
+  // å¤„ç†cookies
+  const cookies = newHeaders.get('set-cookie')
+  if (cookies) {
+    // ä¿®æ”¹cookieçš„domainå’Œsecureå±æ€§
+    let modifiedCookies = cookies
+      .replace(/Domain=[^;]+;/g, `Domain=${originalUrl.hostname};`)
+      .replace(/Secure;/g, '') // å¦‚æœworkerä½¿ç”¨httpï¼Œå¯èƒ½éœ€è¦ç§»é™¤Secure
+    
+    newHeaders.set('set-cookie', modifiedCookies)
+  }
+  
+  // ç§»é™¤ä¸éœ€è¦çš„å“åº”å¤´
+  newHeaders.delete('strict-transport-security')
+  
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: newHeaders
+  })
+}      // ä¿ç•™æŸ¥è¯¢å‚æ•°
       actualUrlStr += url.search;
 
-      // ´´½¨ĞÂ Headers ¶ÔÏó£¬ÅÅ³ıÒÔ 'cf-' ¿ªÍ·µÄÇëÇóÍ·
+      // åˆ›å»ºæ–° Headers å¯¹è±¡ï¼Œæ’é™¤ä»¥ 'cf-' å¼€å¤´çš„è¯·æ±‚å¤´
       const newHeaders = filterHeaders(request.headers, name => !name.startsWith('cf-'));
 
-      // ´´½¨Ò»¸öĞÂµÄÇëÇóÒÔ·ÃÎÊÄ¿±ê URL
+      // åˆ›å»ºä¸€ä¸ªæ–°çš„è¯·æ±‚ä»¥è®¿é—®ç›®æ ‡ URL
       const modifiedRequest = new Request(actualUrlStr, {
           headers: newHeaders,
           method: request.method,
@@ -48,30 +132,30 @@ async function handleRequest(request) {
           redirect: 'manual'
       });
 
-      // ·¢Æğ¶ÔÄ¿±ê URL µÄÇëÇó
+      // å‘èµ·å¯¹ç›®æ ‡ URL çš„è¯·æ±‚
       const response = await fetch(modifiedRequest);
       let body = response.body;
 
-      // ´¦ÀíÖØ¶¨Ïò
+      // å¤„ç†é‡å®šå‘
       if ([301, 302, 303, 307, 308].includes(response.status)) {
           body = response.body;
-          // ´´½¨ĞÂµÄ Response ¶ÔÏóÒÔĞŞ¸Ä Location Í·²¿
+          // åˆ›å»ºæ–°çš„ Response å¯¹è±¡ä»¥ä¿®æ”¹ Location å¤´éƒ¨
           return handleRedirect(response, body);
       } else if (response.headers.get("Content-Type")?.includes("text/html")) {
           body = await handleHtmlContent(response, url.protocol, url.host, actualUrlStr);
       }
 
-      // ´´½¨ĞŞ¸ÄºóµÄÏìÓ¦¶ÔÏó
+      // åˆ›å»ºä¿®æ”¹åçš„å“åº”å¯¹è±¡
       const modifiedResponse = new Response(body, {
           status: response.status,
           statusText: response.statusText,
           headers: response.headers
       });
 
-      // Ìí¼Ó½ûÓÃ»º´æµÄÍ·²¿
+      // æ·»åŠ ç¦ç”¨ç¼“å­˜çš„å¤´éƒ¨
       setNoCacheHeaders(modifiedResponse.headers);
 
-      // Ìí¼Ó CORS Í·²¿£¬ÔÊĞí¿çÓò·ÃÎÊ
+      // æ·»åŠ  CORS å¤´éƒ¨ï¼Œå…è®¸è·¨åŸŸè®¿é—®
       setCorsHeaders(modifiedResponse.headers);
 
       return modifiedResponse;
@@ -87,12 +171,12 @@ async function handleRequest(request) {
   }
 }
 
-// È·±£ URL ´øÓĞĞ­Òé
+// ç¡®ä¿ URL å¸¦æœ‰åè®®
 function ensureProtocol(url, defaultProtocol) {
   return url.startsWith("http://") || url.startsWith("https://") ? url : defaultProtocol + "//" + url;
 }
 
-// ´¦ÀíÖØ¶¨Ïò
+// å¤„ç†é‡å®šå‘
 function handleRedirect(response, body) {
   const location = new URL(response.headers.get('location'));
   const modifiedLocation = `/${encodeURIComponent(location.toString())}`;
@@ -106,7 +190,7 @@ function handleRedirect(response, body) {
   });
 }
 
-// ´¦Àí HTML ÄÚÈİÖĞµÄÏà¶ÔÂ·¾¶
+// å¤„ç† HTML å†…å®¹ä¸­çš„ç›¸å¯¹è·¯å¾„
 async function handleHtmlContent(response, protocol, host, actualUrlStr) {
   const originalText = await response.text();
   const regex = new RegExp('((href|src|action)=["\'])/(?!/)', 'g');
@@ -115,13 +199,13 @@ async function handleHtmlContent(response, protocol, host, actualUrlStr) {
   return modifiedText;
 }
 
-// Ìæ»» HTML ÄÚÈİÖĞµÄÏà¶ÔÂ·¾¶
+// æ›¿æ¢ HTML å†…å®¹ä¸­çš„ç›¸å¯¹è·¯å¾„
 function replaceRelativePaths(text, protocol, host, origin) {
   const regex = new RegExp('((href|src|action)=["\'])/(?!/)', 'g');
   return text.replace(regex, `$1${protocol}//${host}/${origin}/`);
 }
 
-// ·µ»Ø JSON ¸ñÊ½µÄÏìÓ¦
+// è¿”å› JSON æ ¼å¼çš„å“åº”
 function jsonResponse(data, status) {
   return new Response(JSON.stringify(data), {
       status: status,
@@ -131,24 +215,24 @@ function jsonResponse(data, status) {
   });
 }
 
-// ¹ıÂËÇëÇóÍ·
+// è¿‡æ»¤è¯·æ±‚å¤´
 function filterHeaders(headers, filterFunc) {
   return new Headers([...headers].filter(([name]) => filterFunc(name)));
 }
 
-// ÉèÖÃ½ûÓÃ»º´æµÄÍ·²¿
+// è®¾ç½®ç¦ç”¨ç¼“å­˜çš„å¤´éƒ¨
 function setNoCacheHeaders(headers) {
   headers.set('Cache-Control', 'no-store');
 }
 
-// ÉèÖÃ CORS Í·²¿
+// è®¾ç½® CORS å¤´éƒ¨
 function setCorsHeaders(headers) {
   headers.set('Access-Control-Allow-Origin', '*');
   headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE');
   headers.set('Access-Control-Allow-Headers', '*');
 }
 
-// ·µ»Ø¸ùÄ¿Â¼µÄ HTML
+// è¿”å›æ ¹ç›®å½•çš„ HTML
 function getRootHtml() {
   return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -157,8 +241,9 @@ function getRootHtml() {
   <title>Cloudflare Workers Proxy</title>
 </head>
 <body>
-  <h1>»¶Ó­Ê¹ÓÃ Cloudflare Workers Proxy</h1>
-  <!-- ÕâÀï¿ÉÒÔÌí¼ÓÄãÖ÷Ò³µÄÆäËûÄÚÈİ -->
+  <h1>æ¬¢è¿ä½¿ç”¨ Cloudflare Workers Proxy</h1>
+  <!-- è¿™é‡Œå¯ä»¥æ·»åŠ ä½ ä¸»é¡µçš„å…¶ä»–å†…å®¹ -->
 </body>
 </html>`;
 }
+
